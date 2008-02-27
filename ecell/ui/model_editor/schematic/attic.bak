@@ -1,0 +1,215 @@
+class Attic:
+    def showMenu( self, anEvent, x = None, y = None ):
+        self.newObjectPosX = x
+        self.newObjectPosY = y
+        menuDictList = self.getMenuItems()        
+        aMenu = gtk.Menu()
+        for i in range (len(menuDictList)):
+            
+            aMenuDict = menuDictList[i]
+            if aMenuDict.keys() == []:
+                return
+            
+            for aMenuName in aMenuDict.keys():
+                menuItem = gtk.MenuItem( aMenuName )
+                menuItem.connect( 'activate', aMenuDict[ aMenuName ] )
+                if aMenuName == 'undo':
+                    if not self.getModelEditor().canUndo() :
+                        menuItem.set_sensitive(False)
+                if aMenuName == 'redo':
+                    if not self.getModelEditor().canRedo():
+                        menuItem.set_sensitive(False)
+                if aMenuName == 'paste':
+                    if self.getModelEditor().getCopyBuffer() == None or not self.canPaste():
+                        menuItem.set_sensitive(False)
+
+                if aMenuName == 'show system' or aMenuName == 'show process' or aMenuName == 'show variable':
+                    (aSubMenu,NoOfSubMenuItem) = self.getSubMenu(aMenuName)
+                    if NoOfSubMenuItem == 0:
+                        menuItem.set_sensitive(False)
+                    else:
+                        menuItem.set_submenu(aSubMenu )
+                if aMenuName == 'show connection':
+                    (aSubMenu,NoOfSubMenuItem) = self.getConnectionMenu()
+                    if NoOfSubMenuItem == 0:
+                        menuItem.set_sensitive(False)
+                    else:
+                        menuItem.set_submenu(aSubMenu )
+
+                if aMenuName == 'extend label':
+                    maxShift = self.getMaxShiftPos(DIRECTION_RIGHT)
+                    aLabel = self.getProperty(OB_PROP_LABEL)
+                    if aLabel.endswith('...') and  maxShift>15: 
+                        menuItem.set_sensitive(True)
+                    else:
+                        menuItem.set_sensitive(False)
+                        
+
+                aMenu.add(menuItem)
+                
+
+            aMenu.append( gtk.MenuItem() )
+        aFullPNList = []
+        for anObjectID in self.layout.theSelectedObjectIDList:
+            anObject = self.layout.getObject( anObjectID )
+            if anObject.getProperty( OB_PROP_HAS_FULLID ):
+                aFullPNList.append(
+                    identifiers.FullPN(
+                        anObject.getProperty( OB_PROP_FULLID ), '' ) )
+        tracerSubMenu = self.getModelEditor().theRuntimeObject.createTracerSubmenu( aFullPNList )
+        aMenu.append( tracerSubMenu )
+
+        self.theMenu = aMenu
+        aMenu.show_all()
+        aMenu.popup(None, None, None, anEvent.button, anEvent.time)
+
+    def buildMenuItems( self ):
+        return [
+            {
+                'undo': self.__undo,
+                'redo': self.__redo
+                },
+            {
+                'cut': self.__cut,
+                'copy': self.__copy,
+                'paste': self.__paste
+                }
+            ]
+    def getSubMenuItems( self, aMenuName):
+        aModelEditor = self.getModelEditor()
+        
+        if isinstance( self.parentObject, Layout ):
+            aParentFullID = identifiers.ROOT_SYSTEM_FULLID
+        else:
+            aParentFullID = self.getProperty(OB_PROP_FULLID)
+            
+        aSystemPath = aParentFullID.getSuperSystemPath()
+        anEntityList = []
+        dmType = None
+        if aMenuName == 'show system':  
+            dmType = DM_TYPE_SYSTEM
+        elif aMenuName == 'show process':
+            dmType = DM_TYPE_PROCESS
+        elif aMenuName == 'show variable':
+            dmType = DM_TYPE_VARIABLE
+
+        entityType = DM_TO_ENTITY_TYPE_MAP[ dmType ]
+        for anEntity in aModelEditor.theModel.getEntityList( dmType, aSystemPath ):
+            anEntityList.append(
+                identifiers.FullID( entityType, aSystemPath, anEntity.localID ) )
+        return anEntityList
+
+    def getConnectionMenu(self):
+        aModelEditor = self.getModelEditor()
+        aSubMenu = gtk.Menu() 
+        NoOfSubMenuItem = 0
+
+        #check whether the var or pro is in the layout
+        existObjectList =self.layout.getObjectList()
+    
+        #get the object FullID exist in the layout using its objectID
+        existObjectFullIDList = []
+        for anID in existObjectList:
+            object = self.layout.getObject(anID)
+            if object.getProperty(OB_PROP_HAS_FULLID):
+                objectFullID = object.getProperty(OB_PROP_FULLID)
+                existObjectFullIDList += [[objectFullID,anID]]
+
+        if self.getProperty(OB_PROP_TYPE) ==OB_PROP_TYPE_PROCESS:
+            
+            #get process obj varrReff list from modelstore by passing the FullID
+            aProcessFullID = self.getProperty( OB_PROP_FULLID )
+            aVarReffList = aModelEditor.theModel.getEntityProperty(
+                identifiers.FullPN( aProcessFullID, DMINFO_PROCESS_VARREFLIST ) )
+            #convert the relative path of var full id into the absolute
+            aVarReffList1 =[]       
+            for aVarReff in aVarReffList:
+                varFullID = ecell.util.getAbsoluteReference(
+                    aProcessFullID, aVarReff[ME_VARREF_FULLID] )
+                aVarReffList1  += [[aVarReff[ME_VARREF_NAME], varFullID]]
+
+            #get list of connection return the connId
+            connectionList = self.getProperty(PR_CONNECTIONLIST)
+        
+            #get the connectionobj for each conn id
+            aVarReffList2 =[]
+            for conn in connectionList:
+                connObj = self.layout.getObject( conn )
+                #get var attached to n varref name for each conn
+                varreffName = connObj.getProperty(CO_NAME)
+                varID = connObj.getProperty(CO_VARIABLE_ATTACHED)
+                #get var FUllID
+                if varID != None:
+                    varFullID = self.layout.getObject( varID ).getProperty(OB_PROP_FULLID)
+                aVarReffList2 += [varreffName]
+            
+            #check if there is missing variable
+            ExistVarRefNameList = []
+            if len(aVarReffList1) != len(aVarReffList2) :
+                for i in range (len(aVarReffList1)):
+                    aVar = aVarReffList1[i][ME_VARREF_FULLID] 
+                    aVarReff = aVarReffList1[i][ME_VARREF_NAME] 
+                    if not aVarReff in aVarReffList2:
+                        for j in range (len(existObjectFullIDList)): 
+                            if aVar == existObjectFullIDList[j][0] and  aVarReff not in ExistVarRefNameList :
+                                menuItem = gtk.MenuItem( aVar+': '+aVarReff )
+                                menuItem.set_name( aVar+','+aVarReff + ',' +existObjectFullIDList[j][1] )
+                                ExistVarRefNameList  += [aVarReff]
+                                menuItem.connect( 'activate', self.__userCreateConnection )
+                                NoOfSubMenuItem += 1
+                                aSubMenu.add(menuItem)
+            
+
+        if self.getProperty(OB_PROP_TYPE) ==OB_PROP_TYPE_VARIABLE:
+            #get var obj process list from modelstore by passing the FullID
+            aVariableFullID = self.getProperty( OB_PROP_FULLID )
+            aProcessList = aModelEditor.theModel.getEntityProperty(
+                identifiers.FullPN( aVariableFullID, MS_VARIABLE_PROCESSLIST ) )
+            #get list of connection return the connId
+            connectionList = self.getProperty(VR_CONNECTIONLIST)
+            #get the connectionobj for each conn id
+            aProcessList2 =[]
+            for conn in connectionList:
+                connObj = self.layout.getObject( conn )
+                varreffName = connObj.getProperty(CO_NAME)
+                proID = connObj.getProperty(CO_PROCESS_ATTACHED)
+                proFullID = self.layout.getObject( proID ).getProperty(OB_PROP_FULLID)
+                aProcessList2 += [proFullID]
+
+            #check if there is missing process
+            existProList =[]
+            if len(aProcessList) != len(aProcessList2) :
+                for aPro in aProcessList :
+                    if not aPro in aProcessList2:
+                        for j in range (len(existObjectFullIDList)): 
+                            if aPro == existObjectFullIDList[j][0] and not aPro in existProList:
+                                menuItem = gtk.MenuItem( aPro )
+                                menuItem.set_name( aPro+','+existObjectFullIDList[j][1] )
+                                existProList += [aPro]
+                                menuItem.connect( 'activate', self.__userCreateConnection )
+                                NoOfSubMenuItem += 1
+                                aSubMenu.add(menuItem)
+            
+        return (aSubMenu,NoOfSubMenuItem)
+                    
+    def getSubMenu(self, aMenuName ):
+
+        anEntityList = self.getSubMenuItems(aMenuName)
+
+        #set the self.existobjectFullIDList
+        self.setExistObjectFullIDList()
+        aSubMenu = gtk.Menu() 
+        NoOfSubMenuItem = 0
+        for aSubMenuName in anEntityList:
+            if not aSubMenuName in self.existobjectFullIDList:
+                menuItem = gtk.MenuItem( aSubMenuName )
+                menuItem.set_name( aSubMenuName)
+                menuItem.connect( 'activate', self.__userCreateObject )
+                NoOfSubMenuItem += 1
+                aSubMenu.add(menuItem)
+                
+        self.existobjectFullIDList = [] 
+            
+        return (aSubMenu,NoOfSubMenuItem)
+
+
